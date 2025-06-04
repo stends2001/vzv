@@ -175,3 +175,114 @@ def reconstruct_timeseries(
             raise ValueError(f"Unknown method '{county_method}' for county {i}")
 
     return reconstructed_data
+
+import numpy as np
+import pandas as pd
+from typing import Tuple, Optional
+
+def create_cyclical_features(values: np.ndarray, period: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Convert cyclical values to sine/cosine features
+    
+    Parameters:
+    -----------
+    values : np.ndarray
+        The cyclical values (e.g., week numbers, day of year)
+    period : int
+        The period of the cycle (e.g., 52 for weeks, 365 for days)
+    
+    Returns:
+    --------
+    sin_features : np.ndarray
+        Sine transformed features
+    cos_features : np.ndarray  
+        Cosine transformed features
+    """
+    # Normalize to [0, 2π]
+    normalized = 2 * np.pi * values / period
+    
+    sin_features = np.sin(normalized)
+    cos_features = np.cos(normalized)
+    
+    return sin_features, cos_features
+
+def add_temporal_features(data_timepoints: pd.DataFrame, 
+                         include_week_of_year: bool = True,
+                         include_week_absolute: bool = True,
+                         include_month: bool = True,
+                         include_quarter: bool = True) -> pd.DataFrame:
+    """
+    Add various temporal features with cyclical encoding
+    
+    Parameters:
+    -----------
+    data_timepoints : pd.DataFrame
+        DataFrame with temporal information (should have 'week_abs', 'year', 'week_rel' columns)
+    include_week_of_year : bool
+        Include week of year (1-52) as sin/cos features
+    include_week_absolute : bool
+        Include absolute week number as linear feature
+    include_month : bool
+        Include month as sin/cos features
+    include_quarter : bool
+        Include quarter as sin/cos features
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with added temporal features
+    """
+    df = data_timepoints.copy()
+    
+    if include_week_of_year:
+        # Week of year (1-52 cycle)
+        week_of_year = df['week_rel'] + 1  # Convert 0-based to 1-based
+        week_sin, week_cos = create_cyclical_features(week_of_year, 52)
+        df['week_sin'] = week_sin
+        df['week_cos'] = week_cos
+    
+    if include_week_absolute:
+        # Absolute week (linear trend)
+        df['week_abs_norm'] = (df['week_abs'] - df['week_abs'].min()) / (df['week_abs'].max() - df['week_abs'].min())
+    
+    if include_month:
+        # Approximate month from week_rel (assuming 4.33 weeks per month)
+        month_approx = (df['week_rel'] / 4.33).astype(int) + 1
+        month_approx = np.clip(month_approx, 1, 12)  # Ensure valid month range
+        month_sin, month_cos = create_cyclical_features(month_approx, 12)
+        df['month_sin'] = month_sin
+        df['month_cos'] = month_cos
+    
+    if include_quarter:
+        # Quarter from week_rel (13 weeks per quarter)
+        quarter = (df['week_rel'] // 13) + 1
+        quarter = np.clip(quarter, 1, 4)
+        quarter_sin, quarter_cos = create_cyclical_features(quarter, 4)
+        df['quarter_sin'] = quarter_sin
+        df['quarter_cos'] = quarter_cos
+    
+    return df
+
+def create_temporal_feature_matrix(temporal_df: pd.DataFrame, 
+                                 feature_columns: list = None) -> np.ndarray:
+    """
+    Create a matrix of temporal features for each time point
+    
+    Parameters:
+    -----------
+    temporal_df : pd.DataFrame
+        DataFrame with temporal features
+    feature_columns : list
+        List of column names to include as features
+        
+    Returns:
+    --------
+    np.ndarray
+        Matrix of shape (n_timepoints, n_features)
+    """
+    if feature_columns is None:
+        # Default temporal features
+        feature_columns = [col for col in temporal_df.columns 
+                          if any(suffix in col for suffix in ['_sin', '_cos', '_norm'])]
+    
+    return temporal_df[feature_columns].values
